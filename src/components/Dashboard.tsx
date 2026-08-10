@@ -7,6 +7,7 @@ import {
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import { QRCodeSVG } from "qrcode.react";
+import Link from "next/link";
 import {
   Copy,
   CheckCircle2,
@@ -17,11 +18,13 @@ import {
   Zap,
   Shield,
   ExternalLink,
+  Smartphone,
+  CreditCard,
 } from "lucide-react";
 import TransakMockModal from "./TransakMockModal";
 
 // =============================================================================
-// Dashboard — Production-Ready Dark Mode Web3 UI
+// Dashboard — Production-Ready Dark Mode Web3 UI (pt-BR)
 // =============================================================================
 
 const SOLANA_RPC_URL =
@@ -34,6 +37,16 @@ interface WalletInfo {
   currency: string;
   state: string;
 }
+
+interface NfcTransaction {
+  id: string;
+  amount: number;
+  timestamp: string;
+  status: "concluido" | "processando";
+  hash: string;
+}
+
+type NfcState = "idle" | "scanning" | "success";
 
 export default function Dashboard() {
   // ---- Wallet state --------------------------------------------------------
@@ -52,6 +65,11 @@ export default function Dashboard() {
   const [payAmount, setPayAmount] = useState<string>("1");
   const [payTxHash, setPayTxHash] = useState<string | null>(null);
   const [paySending, setPaySending] = useState(false);
+
+  // ---- NFC Tap-to-Pay state ------------------------------------------------
+  const [nfcAmount, setNfcAmount] = useState<string>("50");
+  const [nfcState, setNfcState] = useState<NfcState>("idle");
+  const [nfcTransactions, setNfcTransactions] = useState<NfcTransaction[]>([]);
 
   // ==========================================================================
   // 1. Generate Wallet
@@ -72,11 +90,11 @@ export default function Dashboard() {
         // Auto-fetch balance after wallet generation
         setTimeout(() => fetchBalance(data.wallet.address), 500);
       } else {
-        setWalletError(data.error || "Failed to generate wallet.");
+        setWalletError(data.error || "Erro ao gerar carteira.");
       }
     } catch (err) {
       console.error("Wallet generation error:", err);
-      setWalletError("Network error. Check your connection.");
+      setWalletError("Erro de rede. Verifique sua conexão.");
     } finally {
       setWalletLoading(false);
     }
@@ -88,6 +106,13 @@ export default function Dashboard() {
   const fetchBalance = useCallback(async (address?: string) => {
     const addr = address || wallet?.address;
     if (!addr) return;
+    // Validate that the address looks like a valid Solana base58 address
+    // Solana addresses are 32-44 characters, base58 encoded
+    if (addr.length < 32 || addr.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(addr)) {
+      console.warn("Invalid Solana address format:", addr.slice(0, 10) + "...");
+      setSolBalance(0);
+      return;
+    }
     setBalanceLoading(true);
     try {
       const connection = new Connection(SOLANA_RPC_URL, "confirmed");
@@ -126,7 +151,7 @@ export default function Dashboard() {
   // ==========================================================================
   const handleTransakDeposit = useCallback(() => {
     if (!wallet?.address) {
-      alert("Generate a wallet first.");
+      alert("Gere uma carteira primeiro.");
       return;
     }
     setTransakOpen(true);
@@ -147,7 +172,7 @@ export default function Dashboard() {
   // ==========================================================================
   const handleStripeDeposit = useCallback(async () => {
     if (!wallet?.address) {
-      alert("Generate a wallet first.");
+      alert("Gere uma carteira primeiro.");
       return;
     }
 
@@ -162,19 +187,19 @@ export default function Dashboard() {
       if (data.mock) {
         // Mock mode — simulate a successful deposit for the demo
         alert(
-          `${data.message}\n\nFor this demo, we'll simulate a $50 USDC deposit.`
+          `${data.message}\n\nPara esta demonstração, simularemos um depósito de $50 USDC.`
         );
         setUsdcBalance((prev) => prev + 50);
       } else if (data.clientSecret) {
         // Real Stripe flow — would use stripe.confirmCryptoPayment(clientSecret)
         alert(
-          `Stripe Crypto Onramp session created!\nSession: ${data.sessionId}\n\n` +
-            `In production, this opens the Stripe Crypto Onramp UI.`
+          `Sessão do Stripe Crypto Onramp criada!\nSessão: ${data.sessionId}\n\n` +
+            `Em produção, esta interface abre o Stripe Crypto Onramp UI.`
         );
       }
     } catch (err) {
       console.error("Stripe onramp error:", err);
-      alert("Stripe integration error. Check console.");
+      alert("Erro na integração com Stripe. Verifique o console.");
     }
   }, [wallet?.address]);
 
@@ -183,12 +208,12 @@ export default function Dashboard() {
   // ==========================================================================
   const handleSendPayment = useCallback(async () => {
     if (!wallet?.address) {
-      alert("Generate a wallet first.");
+      alert("Gere uma carteira primeiro.");
       return;
     }
     const amount = parseFloat(payAmount);
     if (isNaN(amount) || amount <= 0) {
-      alert("Enter a valid amount.");
+      alert("Insira um valor válido.");
       return;
     }
 
@@ -208,11 +233,58 @@ export default function Dashboard() {
       setSolBalance((prev) => Math.max(0, (prev ?? 0) - amount * 0.00001));
     } catch (err) {
       console.error("Send payment error:", err);
-      alert("Transaction failed.");
+      alert("Transação falhou.");
     } finally {
       setPaySending(false);
     }
   }, [wallet?.address, payAmount]);
+
+  // ==========================================================================
+  // 7. NFC Tap-to-Pay (Simulador)
+  // ==========================================================================
+  const handleNfcTap = useCallback(async () => {
+    if (!wallet?.address) {
+      alert("Gere uma carteira primeiro.");
+      return;
+    }
+    const amount = parseFloat(nfcAmount);
+    if (isNaN(amount) || amount <= 0) {
+      alert("Insira um valor válido em BRL.");
+      return;
+    }
+
+    // Step 1: Start scanning animation
+    setNfcState("scanning");
+
+    // Step 2: Simulate NFC detection (2-3 seconds)
+    await new Promise((resolve) => setTimeout(resolve, 2500 + Math.random() * 1000));
+
+    // Step 3: Transaction success
+    const BRL_TO_USDC_RATE = 5.72;
+    const usdcReceived = amount / BRL_TO_USDC_RATE;
+
+    const tx: NfcTransaction = {
+      id: `NFC-${Date.now().toString(36)}`,
+      amount: usdcReceived,
+      timestamp: new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+      status: "concluido",
+      hash: `NfcTx${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    };
+
+    setNfcTransactions((prev) => [tx, ...prev]);
+    setUsdcBalance((prev) => prev + usdcReceived);
+    setNfcState("success");
+
+    // Reset to idle after showing success
+    setTimeout(() => setNfcState("idle"), 2500);
+
+    // Re-fetch on-chain balance
+    fetchBalance();
+  }, [wallet?.address, nfcAmount, fetchBalance]);
 
   // ==========================================================================
   // Render
@@ -228,10 +300,17 @@ export default function Dashboard() {
                 <Zap size={16} className="text-white" />
               </div>
               <span className="text-lg font-bold tracking-tight">
-                <span className="text-emerald-400">Rendey</span>
+                <span className="text-emerald-400">Valence</span>
+                <span className="text-gray-500 text-xs ml-2 font-normal">Terminal</span>
               </span>
             </div>
             <div className="flex items-center gap-3">
+              <Link
+                href="/"
+                className="text-[10px] text-gray-500 hover:text-white transition-colors hidden sm:block"
+              >
+                ← Landing
+              </Link>
               <span className="text-[10px] rounded-full bg-emerald-500/15 text-emerald-400 px-2.5 py-1 font-medium border border-emerald-500/20">
                 SOLANA DEVNET
               </span>
@@ -251,7 +330,7 @@ export default function Dashboard() {
             <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Wallet size={16} className="text-emerald-400" />
-                <h2 className="text-sm font-semibold">Your Wallet</h2>
+                <h2 className="text-sm font-semibold">Sua Carteira</h2>
               </div>
               {wallet && (
                 <div className="flex items-center gap-2">
@@ -259,7 +338,7 @@ export default function Dashboard() {
                     onClick={() => fetchBalance()}
                     disabled={balanceLoading}
                     className="text-gray-500 hover:text-white transition-colors disabled:opacity-50"
-                    title="Refresh balance"
+                    title="Atualizar saldo"
                   >
                     <RefreshCw
                       size={14}
@@ -271,7 +350,7 @@ export default function Dashboard() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-500 hover:text-white transition-colors"
-                    title="View on Explorer"
+                    title="Ver no Explorer"
                   >
                     <ExternalLink size={14} />
                   </a>
@@ -290,7 +369,7 @@ export default function Dashboard() {
                     <button
                       onClick={handleCopyAddress}
                       className="text-gray-500 hover:text-white transition-colors shrink-0"
-                      title="Copy address"
+                      title="Copiar endereço"
                     >
                       {copied ? (
                         <CheckCircle2 size={14} className="text-emerald-400" />
@@ -304,7 +383,7 @@ export default function Dashboard() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-white/[0.03] rounded-xl p-4 border border-white/[0.06]">
                       <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
-                        SOL Balance
+                        Saldo SOL
                       </p>
                       <p className="text-xl font-bold text-white">
                         {balanceLoading ? (
@@ -321,7 +400,7 @@ export default function Dashboard() {
                     </div>
                     <div className="bg-white/[0.03] rounded-xl p-4 border border-white/[0.06]">
                       <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
-                        USDC Balance
+                        Saldo USDC
                       </p>
                       <p className="text-xl font-bold text-white">
                         {usdcBalance.toFixed(2)}
@@ -342,12 +421,12 @@ export default function Dashboard() {
                     {walletLoading ? (
                       <span className="flex items-center gap-2">
                         <RefreshCw size={14} className="animate-spin" />
-                        Generating wallet…
+                        Gerando carteira…
                       </span>
                     ) : (
                       <span className="flex items-center gap-2">
                         <Wallet size={16} />
-                        Generate Wallet (Circle)
+                        Gerar Carteira (Circle)
                       </span>
                     )}
                   </button>
@@ -366,7 +445,7 @@ export default function Dashboard() {
             <div className="px-6 py-4 border-b border-white/[0.06]">
               <div className="flex items-center gap-2">
                 <ArrowDownToLine size={16} className="text-blue-400" />
-                <h2 className="text-sm font-semibold">Deposit / Fund Wallet</h2>
+                <h2 className="text-sm font-semibold">Depositar / Alimentar Carteira</h2>
               </div>
             </div>
 
@@ -389,7 +468,7 @@ export default function Dashboard() {
                   BRL via PIX → SOL / USDC
                 </p>
                 <p className="text-[10px] text-gray-600">
-                  Instant fiat onramp with PIX payment
+                  Onramp fiat instantâneo com pagamento PIX
                 </p>
               </button>
 
@@ -408,23 +487,175 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <p className="text-xs text-gray-400">
-                  Card / Bank → USDC on Solana
+                  Cartão / Banco → USDC na Solana
                 </p>
                 <p className="text-[10px] text-gray-600">
-                  Stripe Crypto Onramp integration
+                  Integração Stripe Crypto Onramp
                 </p>
               </button>
             </div>
           </section>
 
           {/* ================================================================ */}
-          {/* CARD 3 — Solana Pay & Transfers                                  */}
+          {/* CARD 3 — NFC Tap-to-Pay (Aproximação)                            */}
+          {/* ================================================================ */}
+          <section className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
+            <div className="px-6 py-4 border-b border-white/[0.06]">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Smartphone size={16} className="text-amber-400" />
+                  <h2 className="text-sm font-semibold">NFC Tap-to-Pay (Aproximação)</h2>
+                </div>
+                <span className="text-[10px] rounded-full bg-amber-500/15 text-amber-400 px-2.5 py-1 font-medium border border-amber-500/20">
+                  Simulador
+                </span>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {/* NFC Active State — Scanning Animation */}
+              {nfcState === "scanning" && (
+                <div className="text-center py-8 space-y-4">
+                  {/* Pulsing NFC icon */}
+                  <div className="relative w-20 h-20 mx-auto">
+                    <div className="absolute inset-0 rounded-full bg-amber-400/20 animate-ping" />
+                    <div className="absolute inset-2 rounded-full bg-amber-400/10 animate-pulse" />
+                    <div className="relative w-20 h-20 rounded-full bg-amber-500/15 border-2 border-amber-500/30 flex items-center justify-center">
+                      <Smartphone size={28} className="text-amber-400 animate-pulse" />
+                    </div>
+                  </div>
+                  <p className="text-sm text-amber-400 font-medium animate-pulse">
+                    Aguardando aproximação do celular/cartão…
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    Mantenha o dispositivo próximo ao leitor NFC
+                  </p>
+                  {/* Scanning dots */}
+                  <div className="flex justify-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </div>
+                </div>
+              )}
+
+              {/* NFC Success State */}
+              {nfcState === "success" && (
+                <div className="text-center py-8 space-y-4">
+                  <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500/15 border-2 border-emerald-500/30 flex items-center justify-center">
+                    <CheckCircle2 size={32} className="text-emerald-400" />
+                  </div>
+                  <p className="text-sm text-emerald-400 font-semibold">
+                    ✓ Transação NFC concluída!
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    USDC creditado na carteira via aproximação
+                  </p>
+                </div>
+              )}
+
+              {/* NFC Idle State — Input + Button */}
+              {nfcState === "idle" && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[10px] text-gray-500 mb-1 block">
+                      Valor em BRL
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                        R$
+                      </span>
+                      <input
+                        type="number"
+                        value={nfcAmount}
+                        onChange={(e) => setNfcAmount(e.target.value)}
+                        min="1"
+                        step="5"
+                        className="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg pl-10 pr-4 py-2.5 text-white text-sm focus:outline-none focus:border-amber-500/50 transition-colors font-mono"
+                        placeholder="50"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Estimated USDC */}
+                  {parseFloat(nfcAmount) > 0 && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                      <p className="text-[10px] text-amber-400">
+                        Valor estimado em USDC
+                      </p>
+                      <p className="text-lg font-bold text-amber-300">
+                        ≈ ${(parseFloat(nfcAmount) / 5.72).toFixed(2)}
+                        <span className="text-xs font-normal text-amber-400/60 ml-1">
+                          USDC
+                        </span>
+                      </p>
+                      <p className="text-[10px] text-gray-600 mt-1">
+                        Taxa: 1 USD = R$ 5.72 · Taxas incluídas
+                      </p>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleNfcTap}
+                    disabled={!wallet}
+                    className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-all text-sm flex items-center justify-center gap-2"
+                  >
+                    <Smartphone size={16} />
+                    Ativar Leitor NFC (Simulador)
+                  </button>
+                  {!wallet && (
+                    <p className="text-[10px] text-gray-600 text-center">
+                      Gere uma carteira primeiro para usar o NFC
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* NFC Transaction Ledger */}
+              {nfcTransactions.length > 0 && (
+                <div className="mt-6 border-t border-white/[0.06] pt-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <CreditCard size={12} className="text-gray-500" />
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">
+                      Histórico NFC
+                    </p>
+                  </div>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {nfcTransactions.map((tx) => (
+                      <div
+                        key={tx.id}
+                        className="flex items-center justify-between bg-white/[0.02] rounded-lg p-2.5 border border-white/[0.04]"
+                      >
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 size={12} className="text-emerald-400" />
+                          <div>
+                            <p className="text-[10px] text-white font-medium">
+                              {tx.amount.toFixed(2)} USDC
+                            </p>
+                            <p className="text-[9px] text-gray-600 font-mono">
+                              {tx.hash}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-[9px] text-gray-600">
+                          {tx.timestamp}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ================================================================ */}
+          {/* CARD 4 — Solana Pay & Transfers                                  */}
           {/* ================================================================ */}
           <section className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
             <div className="px-6 py-4 border-b border-white/[0.06]">
               <div className="flex items-center gap-2">
                 <Send size={16} className="text-cyan-400" />
-                <h2 className="text-sm font-semibold">Solana Pay & Transfers</h2>
+                <h2 className="text-sm font-semibold">Solana Pay e Transferências</h2>
               </div>
             </div>
 
@@ -432,7 +663,7 @@ export default function Dashboard() {
               {/* Receive — QR Code */}
               <div className="flex flex-col items-center gap-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-6">
                 <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
-                  Receive
+                  Receber
                 </h3>
 
                 {wallet ? (
@@ -450,12 +681,12 @@ export default function Dashboard() {
                       {wallet.address}
                     </p>
                     <p className="text-[10px] text-gray-500">
-                      Scan to receive SOL/USDC on Devnet
+                      Escaneie para receber SOL/USDC na Devnet
                     </p>
                   </>
                 ) : (
                   <div className="w-40 h-40 bg-white/[0.03] rounded-xl border border-dashed border-white/10 flex items-center justify-center">
-                    <span className="text-gray-600 text-xs">Generate wallet first</span>
+                    <span className="text-gray-600 text-xs">Gere uma carteira primeiro</span>
                   </div>
                 )}
               </div>
@@ -463,13 +694,13 @@ export default function Dashboard() {
               {/* Send — Transfer */}
               <div className="flex flex-col gap-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-6">
                 <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider text-center">
-                  Send
+                  Enviar
                 </h3>
 
                 {/* Amount input */}
                 <div>
                   <label className="text-[10px] text-gray-500 mb-1 block">
-                    Amount (SOL)
+                    Valor (SOL)
                   </label>
                   <input
                     type="number"
@@ -491,12 +722,12 @@ export default function Dashboard() {
                   {paySending ? (
                     <>
                       <RefreshCw size={14} className="animate-spin" />
-                      Sending…
+                      Enviando…
                     </>
                   ) : (
                     <>
                       <Send size={14} />
-                      Send SOL
+                      Enviar SOL
                     </>
                   )}
                 </button>
@@ -505,7 +736,7 @@ export default function Dashboard() {
                 {payTxHash && (
                   <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
                     <p className="text-[10px] text-emerald-400 mb-1">
-                      ✓ Transaction simulated
+                      ✓ Transação simulada
                     </p>
                     <p className="text-[10px] text-gray-500 font-mono break-all">
                       {payTxHash}
@@ -517,7 +748,7 @@ export default function Dashboard() {
                 {wallet && (
                   <div className="mt-auto bg-white/[0.02] border border-white/[0.04] rounded-lg p-3 text-[10px] text-gray-500 space-y-1">
                     <div className="flex justify-between">
-                      <span>Network</span>
+                      <span>Rede</span>
                       <span className="text-cyan-400">Solana Devnet</span>
                     </div>
                     <div className="flex justify-between">
@@ -535,11 +766,15 @@ export default function Dashboard() {
         <footer className="border-t border-white/[0.06] py-6 mt-8">
           <div className="max-w-5xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2">
             <p className="text-[11px] text-gray-600">
-              © 2026 Rendey — Crypto-Fiat Payment Platform
+              © 2026 Rendey LLC — Plataforma de Pagamento Cripto-Fiat
             </p>
-            <p className="text-[10px] text-gray-700">
-              Circle · Stripe · Solana · Built for Brazil
-            </p>
+            <div className="flex items-center gap-3 text-[10px] text-gray-700">
+              <Link href="/termos" className="hover:text-gray-400 transition-colors">Termos</Link>
+              <span>·</span>
+              <Link href="/privacidade" className="hover:text-gray-400 transition-colors">Privacidade</Link>
+              <span>·</span>
+              <span>Circle · Stripe · Solana</span>
+            </div>
           </div>
         </footer>
       </div>
