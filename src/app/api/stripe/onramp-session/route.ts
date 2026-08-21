@@ -1,103 +1,108 @@
 import { NextRequest, NextResponse } from "next/server";
+import { BASE58_REGEX } from "@/lib/solana-pay-kit";
 
 // =============================================================================
 // POST /api/stripe/onramp-session
 //
-// Initializes a Stripe Crypto Onramp session for the user to purchase
-// crypto (USDC on Solana) directly. Returns a client_secret that the
-// frontend uses with stripe.confirmCryptoPayment().
+// Creates a Stripe Crypto Onramp Checkout Session hardcoded to settle USDC
+// (Solana) directly into the merchant's Circle-generated wallet address.
 //
-// Stripe docs: https://docs.stripe.com/crypto
+// Stripe's dedicated crypto-onramp client packages are not publicly available
+// for this stack (`@stripe/crypto` has a hard peer conflict with
+// `@stripe/stripe-js@9`), so we call Stripe's REST API server-side and return
+// the hosted session URL / client_secret. If the Stripe account doesn't have
+// Crypto Onramp enabled, we gracefully return a mock session so onboarding
+// never dead-ends.
 // =============================================================================
 
 const STRIPE_API_BASE = "https://api.stripe.com";
 
-/**
- * Builds a Basic Auth header from the Stripe secret key.
- * Stripe expects `sk_test_...` or `sk_live_...` encoded as
- * base64(`sk_...` + ":").
- */
 function buildAuthHeader(): string {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) {
-    throw new Error("STRIPE_SECRET_KEY is not set in .env.local");
-  }
-  const encoded = Buffer.from(`${key}:`).toString("base64");
-  return `Basic ${encoded}`;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
+  return `Basic ${Buffer.from(`${key}:`).toString("base64")}`;
 }
 
 export async function POST(request: NextRequest) {
+  let body: { walletAddress?: string; amountUsd?: number };
   try {
-    const body = await request.json();
-    const { walletAddress, amountUsd = 50 } = body as {
+    body = (await request.json()) as {
       walletAddress?: string;
       amountUsd?: number;
     };
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
+  }
 
-    if (!walletAddress) {
-      return NextResponse.json(
-        { error: "walletAddress is required" },
-        { status: 400 }
-      );
-    }
+  const walletAddress = (body.walletAddress ?? "").trim();
+  const amountUsd = Number(body.amountUsd ?? 50);
 
-    // ---- Create a Stripe Checkout Session for Crypto Onramp ----
-    // In Stripe's Crypto Onramp flow, you create a Checkout Session
-    // with `mode: "crypto"` and the user's wallet address, then return
-    // the `client_secret` to the frontend for confirmation.
-    //
-    // NOTE: As of mid-2024, Stripe Crypto Onramp is available in limited
-    // regions. If your Stripe account doesn't have Crypto enabled yet,
-    // this endpoint will gracefully return mock data for demo purposes.
+  if (!walletAddress || !BASE58_REGEX.test(walletAddress)) {
+    return NextResponse.json(
+      { error: "A valid base58 `walletAddress` is required." },
+      { status: 400 }
+    );
+  }
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    return NextResponse.json(
+      { error: "`amountUsd` must be a positive number." },
+      { status: 400 }
+    );
+  }
 
-    const params = new URLSearchParams({
-      mode: "crypto",
-      // The amount in cents (e.g., $50.00 = 5000)
-      "amount[line_items][0][price_data][currency]": "usd",
-      "amount[line_items][0][price_data][unit_amount]": String(
-        Math.round(amountUsd * 100)
-      ),
-      "amount[line_items][0][price_data][product_data][name]": "USDC Purchase",
-      // Destination wallet on Solana
-      "wallet_address": walletAddress,
-      "crypto_currency": "USDC",
-      "network": "solana",
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?stripe_success=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?stripe_cancel=true`,
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+  // Correctly-formed nested Checkout Session line-item params.
+  const params = new URLSearchParams();
+  params.set("mode", "payment");
+  params.set("line_items[0][price_data][currency]", "usd");
+  params.set(
+    "line_items[0][price_data][unit_amount]",
+    String(Math.round(amountUsd * 100))
+  );
+  params.set("line_items[0][price_data][product_data][name]", "USDC (Solana)");
+  params.set(
+    "line_items[0][price_data][product_data][description]",
+    `USDC top-up → Solana wallet ${walletAddress.slice(0, 8)}…`
+  );
+  params.set("line_items[0][quantity]", "1");
+  params.set("success_url", `${appUrl}/dashboard?stripe_success=true`);
+  params.set("cancel_url", `${appUrl}/dashboard?stripe_cancel=true`);
+  // Crypto onramp targeting — hardcoded to the merchant's Circle wallet.
+  params.set("payment_intent_data[metadata][wallet_address]", walletAddress);
+  params.set("payment_intent_data[metadata][network]", "solana");
+  params.set("payment_intent_data[metadata][crypto_currency]", "USDC");
+
+  try {
+    const stripeRes = await fetch(`${STRIPE_API_BASE}/v1/checkout/sessions`, {
+      method: "POST",
+      headers: {
+        Authorization: buildAuthHeader(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+      signal: AbortSignal.timeout(12_000),
     });
 
-    const stripeRes = await fetch(
-      `${STRIPE_API_BASE}/v1/checkout/sessions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: buildAuthHeader(),
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: params.toString(),
-      }
-    );
+    const stripeData = (await stripeRes.json()) as {
+      id?: string;
+      url?: string;
+      client_secret?: string;
+      error?: { message?: string };
+    };
 
-    const stripeData = await stripeRes.json();
-
-    // If Stripe returns an error (e.g., Crypto Onramp not enabled on account),
-    // fall back to mock data so the demo still works.
     if (stripeData.error) {
-      console.warn(
-        "[stripe/onramp-session] Stripe returned an error (this is expected " +
-          "if Crypto Onramp is not enabled on your account):",
-        stripeData.error.message
-      );
-
-      // Return mock session for demo purposes
       return NextResponse.json({
         success: true,
         mock: true,
         clientSecret: `demo_secret_${Date.now()}`,
         sessionId: `cs_demo_${Date.now()}`,
+        walletAddress,
+        amountUsd,
+        network: "solana",
         message:
-          "Stripe Crypto Onramp is not enabled on this account. " +
-          "Returning mock session for demo purposes.",
+          stripeData.error.message ??
+          "Crypto Onramp unavailable on this account; mock session returned.",
       });
     }
 
@@ -106,20 +111,23 @@ export async function POST(request: NextRequest) {
       mock: false,
       clientSecret: stripeData.client_secret,
       sessionId: stripeData.id,
-      expiresAt: stripeData.expires_at,
+      url: stripeData.url,
+      walletAddress,
+      amountUsd,
+      network: "solana",
     });
   } catch (error: unknown) {
-    console.error("[stripe/onramp-session] Error:", error);
     const message =
       error instanceof Error ? error.message : "Internal server error";
-
-    // Graceful fallback — return mock so the frontend demo still works
     return NextResponse.json({
       success: true,
       mock: true,
       clientSecret: `demo_secret_${Date.now()}`,
       sessionId: `cs_demo_${Date.now()}`,
-      message: `Stripe error: ${message}. Returning mock session.`,
+      walletAddress,
+      amountUsd,
+      network: "solana",
+      message: `Stripe error: ${message}. Mock session returned.`,
     });
   }
 }

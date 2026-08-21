@@ -1,0 +1,62 @@
+npm notice run rendey-payment-mvp@0.1.0 npx
+npm notice run next build
+▲ Next.js 16.3.0 (Turbopack)
+- Environments: .env.local
+✓ Running next.config.ts took 1426ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 13.2s
+  Running TypeScript ...
+  Finished TypeScript in 5.6s ...
+  Collecting page data using 11 workers ...
+  Generating static pages using 11 workers (0/19) ...
+  Generating static pages using 11 workers (4/19) 
+  Generating static pages using 11 workers (9/19) 
+  Generating static pages using 11 workers (14/19) 
+✓ Generating static pages using 11 workers (19/19) in 557ms
+Turbopack build encountered 1 warning:
+./src/lib/db.ts:144:22
+Warning: Module not found: Can't resolve 'better-sqlite3'
+  [90m142 |[0m   [36mtry[0m {
+  [90m143 |[0m     [90m// eslint-disable-next-line @typescript-eslint/no-require-imports[0m
+[33m[1m>[0m [90m144 |[0m     [36mconst[0m [33mDatabase[0m = require([32m"better-sqlite3"[0m);
+  [90m    |[0m                      [33m[1m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [90m145 |[0m     ensureDir();
+  [90m146 |[0m     [36mconst[0m db = [36mnew[0m [33mDatabase[0m([33mDB_PATH[0m) [36mas[0m [33mSqliteDb[0m;
+  [90m147 |[0m     db.exec([32m`[0m
+
+
+
+Import trace:
+  App Route:
+    ./src/lib/db.ts
+    ./src/app/api/circle/create-wallet/route.ts
+
+https://nextjs.org/docs/messages/module-not-found
+
+
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/auth/login
+├ ƒ /api/auth/logout
+├ ƒ /api/auth/me
+├ ƒ /api/auth/register
+├ ƒ /api/circle/create-wallet
+├ ƒ /api/stripe/onramp-session
+├ ƒ /api/wallet/balance
+├ ƒ /api/wallet/generate
+├ ○ /dashboard
+├ ○ /login
+├ ○ /privacidade
+├ ○ /register
+├ ○ /terminal
+├ ○ /termos
+└ ○ /whitepaper
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

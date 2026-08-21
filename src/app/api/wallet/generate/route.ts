@@ -33,9 +33,15 @@ function buildHeaders(): HeadersInit {
 // Mock wallet generator — used as fallback when Circle API is unreachable
 // ---------------------------------------------------------------------------
 function generateMockWallet(userEmail: string) {
-  // Generate a deterministic but realistic-looking Solana address
+  // Base58 alphabet (excludes 0, O, I, l) — matches Solana's publicKey encoding
+  const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   const seed = userEmail + Date.now();
-  const mockAddress = `RENDEY${Buffer.from(seed).toString("base64url").slice(0, 40)}`.slice(0, 44);
+  // Use the seed bytes to pick valid base58 characters for a 44-char address
+  const seedBuf = Buffer.from(seed, "utf-8");
+  let mockAddress = "";
+  for (let i = 0; i < 44; i++) {
+    mockAddress += BASE58[seedBuf[i % seedBuf.length] % BASE58.length];
+  }
   const mockWalletId = `wallet-mock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   return {
