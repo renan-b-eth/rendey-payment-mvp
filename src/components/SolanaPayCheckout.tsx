@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import {
   getSolanaCluster,
+  getSolscanUrl,
   getUsdcMint,
   isValidSolanaAddress,
 } from "@/lib/solana";
@@ -375,7 +376,7 @@ export default function SolanaPayCheckout({
             </div>
             {signature && (
               <a
-                href={`https://solscan.io/tx/${signature}`}
+                href={getSolscanUrl(`/tx/${signature}`)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[11px] font-mono text-cyan-300 hover:text-cyan-200 flex items-center gap-1.5 break-all max-w-full transition-colors"

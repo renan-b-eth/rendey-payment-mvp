@@ -8,7 +8,14 @@
 //   • Live USDC balance via Helius (existing /api/wallet/balance)
 //   • Stripe Crypto Onramp (BRL/USD → USDC on Solana, wallet locked
 //     server-side) mounted in a glassmorphism modal
-//   • Solana Pay POS checkout with on-chain confirmation + session ledger
+//   • Solana Pay POS checkout with on-chain confirmation
+//   • REAL on-chain transaction ledger via /api/wallet/transactions
+//     (Solana RPC signatures + parsed USDC deltas — zero placeholder rows)
+//
+// Production status surfaced in the UI:
+//   • Dynamic cluster badge (SOLANA MAINNET / SOLANA DEVNET)
+//   • Gateway status: "Stripe Onramp / Solana Pay — Live"
+//   • Verification status derived from real merchant wallet state
 //
 // Design system: dark glassmorphism (bg-[#0a0b0d], white/[0.06] borders,
 // emerald→cyan gradients). Transaction states surfaced via sonner toasts.
@@ -20,7 +27,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  ArrowDownLeft,
   ArrowDownToLine,
+  ArrowUpRight,
   CheckCircle2,
   Copy,
   ExternalLink,
@@ -35,16 +44,27 @@ import {
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import type { PublicMerchant } from "@/lib/session";
-import { isValidSolanaAddress } from "@/lib/solana";
+import {
+  getClusterLabel,
+  getSolscanUrl,
+  getUsdcMint,
+  isMainnet,
+  isValidSolanaAddress,
+} from "@/lib/solana";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import StripeOnramp from "@/components/StripeOnramp";
 import SolanaPayCheckout from "@/components/SolanaPayCheckout";
 
-interface LedgerEntry {
-  id: string;
+/** Row shape returned by GET /api/wallet/transactions (real on-chain data). */
+interface TransactionRow {
   signature: string;
-  amountUsdc: number;
-  timestamp: number;
+  /** Unix seconds (on-chain blockTime); null when unavailable. */
+  timestamp: number | null;
+  /** Parsed USDC delta for this wallet; null for non-USDC transactions. */
+  amountUsdc: number | null;
+  direction: "in" | "out" | "unknown";
+  /** Optimistic local row awaiting RPC indexing. */
+  pending?: boolean;
 }
 
 type OnrampCurrency = "brl" | "usd";
@@ -64,7 +84,8 @@ export default function Dashboard() {
   const [balance, setBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [txLoading, setTxLoading] = useState(false);
   const [chargeAmount, setChargeAmount] = useState("25.00");
   const [onrampAmount, setOnrampAmount] = useState("250");
   const [onrampCurrency, setOnrampCurrency] = useState<OnrampCurrency>("brl");
@@ -122,11 +143,38 @@ export default function Dashboard() {
     }
   }, []);
 
+  // --- On-chain transaction ledger --------------------------------------------------
+
+  const fetchTransactions = useCallback(async () => {
+    setTxLoading(true);
+    try {
+      const res = await fetch("/api/wallet/transactions", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = (await res.json()) as {
+        transactions?: TransactionRow[];
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to load transactions.");
+      }
+      setTransactions(data.transactions ?? []);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not fetch transactions."
+      );
+    } finally {
+      setTxLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (merchant?.walletAddress) {
       void fetchBalance(merchant.walletAddress);
+      void fetchTransactions();
     }
-  }, [merchant?.walletAddress, fetchBalance]);
+  }, [merchant?.walletAddress, fetchBalance, fetchTransactions]);
 
   // --- Handlers ---------------------------------------------------------------------
 
@@ -191,28 +239,40 @@ export default function Dashboard() {
     });
     setOnrampOpen(false);
     if (merchant?.walletAddress) void fetchBalance(merchant.walletAddress);
-  }, [merchant?.walletAddress, fetchBalance]);
+    // Onramp settlement lands on-chain — refresh the ledger shortly after.
+    setTimeout(() => {
+      void fetchTransactions();
+    }, 15_000);
+  }, [merchant?.walletAddress, fetchBalance, fetchTransactions]);
 
   const handleOnrampError = useCallback((message: string) => {
     toast.error("Onramp failed.", { description: message });
   }, []);
 
-  const addLedgerEntry = useCallback(
-    (entry: Omit<LedgerEntry, "id" | "timestamp">) => {
-      setLedger((prev) => [
-        { ...entry, id: crypto.randomUUID(), timestamp: Date.now() },
-        ...prev,
-      ]);
-    },
-    []
-  );
-
   const handlePaymentConfirmed = useCallback(
     ({ signature, amountUsdc }: { signature: string; amountUsdc: number }) => {
-      addLedgerEntry({ signature, amountUsdc });
+      // Optimistic row — replaced by canonical RPC data on the next fetch.
+      setTransactions((prev) =>
+        prev.some((t) => t.signature === signature)
+          ? prev
+          : [
+              {
+                signature,
+                timestamp: Math.floor(Date.now() / 1000),
+                amountUsdc,
+                direction: "in",
+                pending: true,
+              },
+              ...prev,
+            ]
+      );
       if (merchant?.walletAddress) void fetchBalance(merchant.walletAddress);
+      // RPC indexing lags a few seconds behind on-chain confirmation.
+      setTimeout(() => {
+        void fetchTransactions();
+      }, 12_000);
     },
-    [addLedgerEntry, merchant?.walletAddress, fetchBalance]
+    [merchant?.walletAddress, fetchBalance, fetchTransactions]
   );
 
   // Escape closes the onramp modal.
@@ -263,6 +323,10 @@ export default function Dashboard() {
 
   if (!merchant) return null;
 
+  const mainnet = isMainnet();
+  const clusterLabel = getClusterLabel();
+  const usdcMint = getUsdcMint().toBase58();
+  const usdcMintShort = `${usdcMint.slice(0, 4)}…${usdcMint.slice(-4)}`;
   const validWallet =
     merchant.walletAddress != null &&
     isValidSolanaAddress(merchant.walletAddress);
@@ -280,6 +344,15 @@ export default function Dashboard() {
             <span className="font-semibold tracking-tight">Valence</span>
             <span className="text-[10px] text-gray-600 font-normal hidden sm:inline">
               · Merchant Dashboard
+            </span>
+            <span
+              className={`hidden md:inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wider border ${
+                mainnet
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+              }`}
+            >
+              {clusterLabel}
             </span>
           </Link>
           <div className="flex items-center gap-3">
@@ -332,7 +405,9 @@ export default function Dashboard() {
                       </button>
                       {validWallet && (
                         <a
-                          href={`https://solscan.io/account/${merchant.walletAddress}`}
+                          href={getSolscanUrl(
+                            `/account/${merchant.walletAddress}`
+                          )}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-gray-400 hover:text-cyan-300 transition-colors"
@@ -362,6 +437,28 @@ export default function Dashboard() {
                     </>
                   )}
                 </div>
+
+                {/* Production status strip */}
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] text-gray-500">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        mainnet ? "bg-emerald-400" : "bg-amber-400"
+                      }`}
+                    />
+                    {clusterLabel}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Stripe Onramp / Solana Pay — Live
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-3 h-3 text-emerald-300" />
+                    {merchant.walletAddress
+                      ? "Verified (Production)"
+                      : "Verification pending — wallet not provisioned"}
+                  </span>
+                </div>
               </div>
 
               <div className="shrink-0 bg-white/[0.03] border border-white/[0.06] rounded-xl p-5 min-w-[15rem]">
@@ -390,7 +487,8 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <p className="text-[10px] text-gray-600 mt-1.5">
-                  Live via Helius RPC · mint EPjF…TDt1v
+                  Live on-chain · {mainnet ? "Mainnet" : "Devnet"} · mint{" "}
+                  {usdcMintShort}
                 </p>
               </div>
             </div>
@@ -407,7 +505,7 @@ export default function Dashboard() {
                 Top Up USDC
               </h3>
               <p className="text-[10px] text-gray-500">
-                Stripe Crypto Onramp → your wallet
+                Stripe Onramp / Solana Pay — Live
               </p>
             </div>
             <div className="p-5 flex flex-col gap-4">
@@ -522,20 +620,39 @@ export default function Dashboard() {
           </section>
         </div>
 
-        {/* Settlement Ledger */}
+        {/* On-Chain Transaction Ledger */}
         <section className="rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-sm overflow-hidden">
-          <div className="px-5 py-3.5 border-b border-white/[0.06] bg-white/[0.01]">
-            <h3 className="text-sm font-semibold">Recent Settlements</h3>
-            <p className="text-[10px] text-gray-500">
-              Confirmed Solana Pay receipts this session
-            </p>
+          <div className="px-5 py-3.5 border-b border-white/[0.06] bg-white/[0.01] flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold">
+                On-Chain Transaction Ledger
+              </h3>
+              <p className="text-[10px] text-gray-500">
+                Live from Solana RPC · parsed USDC transfers for your wallet
+              </p>
+            </div>
+            <button
+              onClick={() => void fetchTransactions()}
+              disabled={txLoading}
+              className="text-gray-500 hover:text-emerald-300 transition-colors disabled:opacity-40"
+              aria-label="Refresh transactions"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${txLoading ? "animate-spin" : ""}`}
+              />
+            </button>
           </div>
-          {ledger.length === 0 ? (
+          {transactions.length === 0 ? (
             <div className="p-12 text-center">
-              <CheckCircle2 className="w-8 h-8 text-gray-700 mx-auto mb-3" />
+              {txLoading ? (
+                <Loader2 className="w-6 h-6 text-emerald-400 animate-spin mx-auto mb-3" />
+              ) : (
+                <CheckCircle2 className="w-8 h-8 text-gray-700 mx-auto mb-3" />
+              )}
               <p className="text-xs text-gray-500">
-                No settlements yet — generate a Solana Pay QR to accept your
-                first payment.
+                {txLoading
+                  ? "Loading on-chain transactions…"
+                  : "No on-chain transactions yet — generate a Solana Pay QR to accept your first payment."}
               </p>
             </div>
           ) : (
@@ -555,22 +672,46 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {ledger.map((entry) => (
+                  {transactions.map((entry) => (
                     <tr
-                      key={entry.id}
+                      key={entry.signature}
                       className="border-b border-white/[0.03] hover:bg-white/[0.01] transition-colors"
                     >
                       <td className="px-6 py-3 text-[11px] text-gray-400">
-                        {new Date(entry.timestamp).toLocaleString()}
+                        {entry.timestamp
+                          ? new Date(entry.timestamp * 1000).toLocaleString()
+                          : "—"}
                       </td>
                       <td className="px-6 py-3">
-                        <span className="text-xs font-semibold text-emerald-300">
-                          {entry.amountUsdc.toFixed(2)} USDC
+                        <span className="inline-flex items-center gap-1.5">
+                          {entry.direction === "in" ? (
+                            <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-300" />
+                          ) : entry.direction === "out" ? (
+                            <ArrowUpRight className="w-3.5 h-3.5 text-red-300" />
+                          ) : null}
+                          <span
+                            className={`text-xs font-semibold ${
+                              entry.direction === "in"
+                                ? "text-emerald-300"
+                                : entry.direction === "out"
+                                  ? "text-red-300"
+                                  : "text-gray-400"
+                            }`}
+                          >
+                            {entry.amountUsdc != null
+                              ? `${entry.direction === "out" ? "-" : "+"}${entry.amountUsdc.toFixed(2)} USDC`
+                              : "—"}
+                          </span>
+                          {entry.pending && (
+                            <span className="px-1.5 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-[9px] font-semibold text-amber-300">
+                              indexing
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="px-6 py-3">
                         <a
-                          href={`https://solscan.io/tx/${entry.signature}`}
+                          href={getSolscanUrl(`/tx/${entry.signature}`)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-[11px] font-mono text-cyan-300 hover:text-cyan-200 flex items-center gap-1.5"

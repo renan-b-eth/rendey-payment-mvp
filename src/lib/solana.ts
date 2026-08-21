@@ -49,3 +49,25 @@ export function isValidSolanaAddress(value: string): boolean {
     return false;
   }
 }
+
+// --- Cluster-aware UI helpers ---------------------------------------------------
+
+/** True when settling on Solana mainnet-beta. */
+export function isMainnet(): boolean {
+  return getSolanaCluster() === "mainnet-beta";
+}
+
+/** Uppercase badge label for headers/status strips, e.g. "SOLANA MAINNET". */
+export function getClusterLabel(): string {
+  return isMainnet() ? "SOLANA MAINNET" : "SOLANA DEVNET";
+}
+
+/**
+ * Solscan URL for the given path ("/tx/<sig>", "/account/<addr>", …).
+ * Mainnet uses the bare URL; devnet appends the `?cluster=devnet` param so
+ * explorer links never 404 outside mainnet.
+ */
+export function getSolscanUrl(path: string): string {
+  const base = `https://solscan.io${path}`;
+  return isMainnet() ? base : `${base}?cluster=devnet`;
+}

@@ -38,15 +38,26 @@ export function getStripePublishableKey(): string {
 
 export type SolanaCluster = "mainnet-beta" | "devnet";
 
+/**
+ * Settlement cluster resolution:
+ *   1. Explicit NEXT_PUBLIC_SOLANA_CLUSTER ("mainnet-beta" | "devnet") wins.
+ *   2. When unset, production builds default to mainnet-beta; non-production
+ *      (local dev / preview builds run with NODE_ENV=development) default to
+ *      devnet. NODE_ENV is statically inlined by Next.js, so this is safe in
+ *      client bundles.
+ */
 export function getSolanaCluster(): SolanaCluster {
-  const raw = process.env.NEXT_PUBLIC_SOLANA_CLUSTER ?? "devnet";
-  if (raw !== "mainnet-beta" && raw !== "devnet") {
+  const raw = process.env.NEXT_PUBLIC_SOLANA_CLUSTER;
+  if (raw === "mainnet-beta" || raw === "devnet") {
+    return raw;
+  }
+  if (raw && raw.trim() !== "") {
     throw new Error(
       `[Valence] Invalid NEXT_PUBLIC_SOLANA_CLUSTER "${raw}". ` +
         'Expected "mainnet-beta" or "devnet".'
     );
   }
-  return raw;
+  return process.env.NODE_ENV === "production" ? "mainnet-beta" : "devnet";
 }
 
 /** Optional dedicated RPC endpoint; falls back to the public cluster RPC. */
