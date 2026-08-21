@@ -1,6 +1,6 @@
 {
-  "name": "rendey-payment-mvp",
-  "version": "0.1.0",
+  "name": "valence-payment-platform",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -12,15 +12,19 @@
     "@solana/pay": "^1.0.26",
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4",
+    "@stripe/crypto-onramp-js": "^1.0.0",
     "@stripe/stripe-js": "^9.13.0",
     "@transak/transak-sdk": "^4.0.2",
     "@types/big.js": "^7.0.0",
     "big.js": "^7.0.1",
+    "bignumber.js": "^9.1.2",
     "lucide-react": "^1.30.0",
     "next": "16.3.0",
     "qrcode.react": "^4.2.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sonner": "^1.7.4",
+    "stripe": "^17.5.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

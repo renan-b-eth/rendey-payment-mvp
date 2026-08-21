@@ -3,15 +3,23 @@
 /**
  * Valence — SolanaPayCheckout
  *
- * Encodes a spec-compliant Solana Pay transfer-request QR (USDC mainnet,
- * unique `reference` key), then polls Helius for settlement. On confirmed
- * + validated transfer the UI flips to "Payment Confirmed" with the tx
- * signature and Solscan link. Emits `onConfirmed` so the parent ledger can
- * record the payment.
+ * Official Solana Pay protocol integration (@solana/pay):
+ *   • encodeURL() builds the spec-compliant transfer-request QR — USDC SPL
+ *     mint for the configured cluster, unique `reference` keypair,
+ *     label "Valence Terminal", and an order-id `message`.
+ *   • useSolanaPayMonitor polls findReference() → validateTransfer() and
+ *     flips the UI to "Payment Confirmed" the moment the transfer settles
+ *     on-chain, emitting `onConfirmed` for the parent ledger.
+ *
+ * Toast lifecycle (sonner): Initiated → Confirmed / Failed / Expired.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { encodeURL } from "@solana/pay";
+import BigNumber from "bignumber.js";
 import { QRCodeSVG } from "qrcode.react";
+import { toast } from "sonner";
 import {
   CheckCircle2,
   Copy,
@@ -23,15 +31,16 @@ import {
   XCircle,
 } from "lucide-react";
 import {
-  BASE58_REGEX,
-  buildSolanaPayUrl,
-  generatePaymentReference,
+  getSolanaCluster,
+  getUsdcMint,
   isValidSolanaAddress,
-  waitForPayment,
-} from "@/lib/solana-pay-kit";
-import { useToast } from "@/lib/toast";
+} from "@/lib/solana";
+import { useSolanaPayMonitor } from "@/hooks/useSolanaPayMonitor";
 
-type Phase = "idle" | "qr" | "pending" | "confirmed" | "expired" | "error";
+type Phase = "idle" | "paying" | "confirmed" | "expired" | "error";
+
+const PAYMENT_WINDOW_MS = 180_000;
+const PAYMENT_WINDOW_S = PAYMENT_WINDOW_MS / 1000;
 
 const PHASE_STYLES: Record<
   Phase,
@@ -42,12 +51,7 @@ const PHASE_STYLES: Record<
     dot: "bg-gray-500",
     text: "text-gray-400",
   },
-  qr: {
-    label: "Scan to Pay",
-    dot: "bg-cyan-400",
-    text: "text-cyan-300",
-  },
-  pending: {
+  paying: {
     label: "Awaiting Settlement",
     dot: "bg-amber-400 animate-pulse",
     text: "text-amber-300",
@@ -80,136 +84,139 @@ export default function SolanaPayCheckout({
   amountUsdc,
   onConfirmed,
 }: SolanaPayCheckoutProps) {
-  const { toast } = useToast();
-
   const [phase, setPhase] = useState<Phase>("idle");
+  const [reference, setReference] = useState<PublicKey | null>(null);
   const [payUrl, setPayUrl] = useState<string>("");
-  const [signature, setSignature] = useState<string>("");
+  const [orderId, setOrderId] = useState<string>("");
   const [error, setError] = useState<string>("");
-  const [countdown, setCountdown] = useState<number>(180);
+  const [countdown, setCountdown] = useState<number>(PAYMENT_WINDOW_S);
+  // Amount is locked at checkout start so later edits to the amount input
+  // never corrupt the QR or the on-chain validation for an in-flight payment.
+  const [lockedAmount, setLockedAmount] = useState<number | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const referenceRef = useRef<import("@solana/web3.js").PublicKey | null>(null);
+  const recipientKey = useMemo(
+    () => (isValidSolanaAddress(recipient) ? new PublicKey(recipient) : null),
+    [recipient]
+  );
 
-  const stopTimers = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+  const clusterLabel = useMemo(
+    () => (getSolanaCluster() === "mainnet-beta" ? "Mainnet" : "Devnet"),
+    []
+  );
+
+  const monitoring = phase === "paying";
+  const {
+    status,
+    signature,
+    error: monitorError,
+  } = useSolanaPayMonitor({
+    reference: monitoring ? reference : null,
+    recipient: monitoring ? recipientKey : null,
+    amountUsdc: monitoring ? lockedAmount : null,
+    timeoutMs: PAYMENT_WINDOW_MS,
+  });
+
+  // React to on-chain settlement events.
+  useEffect(() => {
+    if (phase !== "paying") return;
+
+    if (status === "confirmed" && signature) {
+      const settled = lockedAmount ?? amountUsdc;
+      setPhase("confirmed");
+      toast.success(
+        `Payment confirmed — ${settled.toFixed(2)} USDC received.`
+      );
+      onConfirmed?.({ signature, amountUsdc: settled });
+    } else if (status === "failed") {
+      const message =
+        monitorError ?? "On-chain transfer validation failed.";
+      setPhase("error");
+      setError(message);
+      toast.error("Payment failed validation.", { description: message });
+    } else if (status === "timeout") {
+      setPhase("expired");
+      toast.info("Payment window expired — no settlement detected.");
     }
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, []);
+  }, [phase, status, signature, monitorError, lockedAmount, amountUsdc, onConfirmed]);
 
-  const reset = useCallback(() => {
-    stopTimers();
-    setPhase("idle");
-    setPayUrl("");
-    setSignature("");
+  // Countdown while awaiting settlement.
+  useEffect(() => {
+    if (phase !== "paying") return;
+    setCountdown(PAYMENT_WINDOW_S);
+    const timer = setInterval(
+      () => setCountdown((prev) => (prev <= 1 ? 0 : prev - 1)),
+      1_000
+    );
+    return () => clearInterval(timer);
+  }, [phase]);
+
+  const start = useCallback(() => {
     setError("");
-    setCountdown(180);
-    referenceRef.current = null;
-  }, [stopTimers]);
 
-  useEffect(() => () => stopTimers(), [stopTimers]);
-
-  const start = useCallback(async () => {
-    setError("");
-    setSignature("");
-
-    if (!isValidSolanaAddress(recipient) || !BASE58_REGEX.test(recipient)) {
+    if (!recipientKey) {
       setPhase("error");
       setError("Invalid merchant wallet address.");
-      toast("Invalid merchant wallet address.", "error");
+      toast.error("Invalid merchant wallet address.");
       return;
     }
     if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
       setPhase("error");
       setError("Enter an amount greater than zero.");
-      toast("Enter an amount greater than zero.", "error");
+      toast.error("Enter an amount greater than zero.");
       return;
     }
 
-    const reference = generatePaymentReference();
-    referenceRef.current = reference;
+    const newReference = Keypair.generate().publicKey;
+    const newOrderId = crypto.randomUUID().slice(0, 8).toUpperCase();
 
     try {
-      const url = await buildSolanaPayUrl({
-        recipient,
-        usdcAmount: amountUsdc,
-        reference,
-        label: "Valence POS",
-        message: `Valence payment of ${amountUsdc} USDC`,
+      const url = encodeURL({
+        recipient: recipientKey,
+        amount: new BigNumber(amountUsdc),
+        splToken: getUsdcMint(),
+        reference: newReference,
+        label: "Valence Terminal",
+        message: `Valence order ${newOrderId}`,
       });
-      setPayUrl(url);
-      setPhase("qr");
-      setCountdown(180);
+
+      setReference(newReference);
+      setOrderId(newOrderId);
+      setPayUrl(url.toString());
+      setLockedAmount(amountUsdc);
+      setPhase("paying");
+      toast.info("Solana Pay checkout initiated.", {
+        description: `Order ${newOrderId} · waiting for on-chain payment…`,
+      });
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to build Solana Pay link.";
       setPhase("error");
       setError(message);
-      toast(message, "error");
-      return;
+      toast.error(message);
     }
+  }, [recipientKey, amountUsdc]);
 
-    // Begin polling for settlement.
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setPhase("pending");
-
-    const settle = await waitForPayment({
-      reference,
-      recipient,
-      usdcAmount: amountUsdc,
-      timeoutMs: 180_000,
-      intervalMs: 1_800,
-      signal: controller.signal,
-    });
-
-    if (controller.signal.aborted) return;
-
-    if (settle) {
-      setSignature(settle.signature);
-      setPhase("confirmed");
-      toast(`Payment confirmed — ${amountUsdc} USDC received.`, "success");
-      onConfirmed?.({ signature: settle.signature, amountUsdc });
-    } else {
-      setPhase("expired");
-      toast("Payment window expired — no settlement detected.", "info");
-    }
-  }, [recipient, amountUsdc, onConfirmed, toast]);
-
-  // Countdown while awaiting settlement.
-  useEffect(() => {
-    if (phase !== "pending" && phase !== "qr") return;
-    timerRef.current = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          timerRef.current = null;
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1_000);
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [phase]);
+  const reset = useCallback(() => {
+    setPhase("idle");
+    setReference(null);
+    setPayUrl("");
+    setOrderId("");
+    setError("");
+    setLockedAmount(null);
+    setCountdown(PAYMENT_WINDOW_S);
+  }, []);
 
   const copyUrl = useCallback(() => {
     if (!payUrl) return;
-    navigator.clipboard.writeText(payUrl).then(() => {
-      toast("Solana Pay link copied.", "success", 2200);
-    });
-  }, [payUrl, toast]);
+    navigator.clipboard.writeText(payUrl).then(
+      () => toast.success("Solana Pay link copied."),
+      () => toast.error("Could not copy the link.")
+    );
+  }, [payUrl]);
 
   const phaseStyle = PHASE_STYLES[phase];
-  const mm = String(Math.floor(countdown / 60)).padStart(1, "0");
+  const displayAmount = lockedAmount ?? amountUsdc;
+  const mm = String(Math.floor(countdown / 60)).padStart(2, "0");
   const ss = String(countdown % 60).padStart(2, "0");
 
   return (
@@ -225,7 +232,7 @@ export default function SolanaPayCheckout({
               Solana Pay Checkout
             </h3>
             <p className="text-[10px] text-gray-500">
-              USDC · Solana Mainnet · Zero custody
+              USDC · Solana {clusterLabel} · Zero custody
             </p>
           </div>
         </div>
@@ -265,8 +272,8 @@ export default function SolanaPayCheckout({
           </div>
         )}
 
-        {/* QR + PENDING */}
-        {(phase === "qr" || phase === "pending") && (
+        {/* PAYING (QR displayed, awaiting on-chain settlement) */}
+        {phase === "paying" && (
           <div className="flex flex-col sm:flex-row gap-5">
             <div className="flex flex-col items-center gap-3 mx-auto sm:mx-0">
               <div className="bg-white rounded-xl p-3 shadow-lg shadow-black/30">
@@ -291,7 +298,7 @@ export default function SolanaPayCheckout({
             <div className="flex-1 flex flex-col">
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-bold text-white tracking-tight">
-                  {amountUsdc.toFixed(2)}
+                  {displayAmount.toFixed(2)}
                 </span>
                 <span className="text-sm font-semibold text-emerald-300">
                   USDC
@@ -299,6 +306,12 @@ export default function SolanaPayCheckout({
               </div>
               <p className="text-[11px] text-gray-500 mt-1 font-mono break-all">
                 To: {recipient}
+              </p>
+              <p className="text-[10px] text-gray-600 mt-0.5 font-mono">
+                Order {orderId}
+                {reference
+                  ? ` · ref ${reference.toBase58().slice(0, 12)}…`
+                  : ""}
               </p>
 
               <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] p-3.5 flex items-center gap-3">
@@ -308,7 +321,8 @@ export default function SolanaPayCheckout({
                     Waiting for on-chain settlement…
                   </p>
                   <p className="text-[10px] text-gray-500 mt-0.5">
-                    Watching reference key on Solana mainnet via Helius.
+                    Watching the reference key via findReference + validating
+                    the USDC transfer.
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 text-amber-300 font-mono text-xs shrink-0">
@@ -341,8 +355,13 @@ export default function SolanaPayCheckout({
                 Payment Confirmed
               </h4>
               <p className="text-xs text-gray-400 mt-1">
-                {amountUsdc.toFixed(2)} USDC settled to your wallet.
+                {displayAmount.toFixed(2)} USDC settled to your wallet.
               </p>
+              {orderId && (
+                <p className="text-[10px] text-gray-600 mt-0.5 font-mono">
+                  Order {orderId}
+                </p>
+              )}
             </div>
             {signature && (
               <a
