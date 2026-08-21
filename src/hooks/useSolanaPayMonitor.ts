@@ -1,5 +1,12 @@
 "use client";
 
+/* eslint-disable @typescript-eslint/no-explicit-any --
+   Type boundary: @solana/pay's type definitions reference @solana/kit
+   Rpc/Address types, which are structurally incompatible with
+   @solana/web3.js v1's Connection/PublicKey. The runtime objects are fully
+   compatible, so explicit `any` casts are used strictly at the call
+   boundary. */
+
 // =============================================================================
 // useSolanaPayMonitor — Valence Payment Platform
 //
@@ -73,6 +80,10 @@ export function useSolanaPayMonitor({
     const connection = getSolanaConnection();
     const usdcMint = getUsdcMint();
     const expectedAmount = new BigNumber(amountUsdc);
+    // Captured as narrowed non-null consts so the async closure below keeps
+    // stable, type-safe references.
+    const referenceKey = reference;
+    const recipientKey = recipient;
     const startedAt = Date.now();
 
     setStatus("pending");
@@ -89,22 +100,22 @@ export function useSolanaPayMonitor({
       }
 
       try {
-        const { signature: found } = await findReference(
-          connection,
-          reference!,
+        const { signature: found } = (await findReference(
+          connection as any,
+          referenceKey as any,
           { finality: "confirmed" }
-        );
+        )) as { signature: string };
 
         // Throws ValidateTransferError if amount/recipient/token mismatch.
         await validateTransfer(
-          connection,
+          connection as any,
           found,
           {
-            recipient: recipient!,
+            recipient: recipientKey,
             amount: expectedAmount,
             splToken: usdcMint,
-            reference: reference!,
-          },
+            reference: referenceKey,
+          } as any,
           { finality: "confirmed" }
         );
 

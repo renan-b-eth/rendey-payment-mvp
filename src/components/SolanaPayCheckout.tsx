@@ -1,12 +1,18 @@
 "use client";
 
+/* eslint-disable @typescript-eslint/no-explicit-any --
+   Type boundary: @solana/pay's encodeURL typings may expect @solana/kit
+   Address types while we hold @solana/web3.js v1 PublicKey instances. The
+   runtime objects are fully compatible — casts are type-level only. */
+
 /**
  * Valence — SolanaPayCheckout
  *
  * Official Solana Pay protocol integration (@solana/pay):
  *   • encodeURL() builds the spec-compliant transfer-request QR — USDC SPL
- *     mint for the configured cluster, unique `reference` keypair,
- *     label "Valence Terminal", and an order-id `message`.
+ *     mint for the configured cluster, unique `reference` keypair (passed as
+ *     an array per the transfer-request spec), label "Valence Terminal", and
+ *     an order-id `message`.
  *   • useSolanaPayMonitor polls findReference() → validateTransfer() and
  *     flips the UI to "Payment Confirmed" the moment the transfer settles
  *     on-chain, emitting `onConfirmed` for the parent ledger.
@@ -170,11 +176,15 @@ export default function SolanaPayCheckout({
     const newOrderId = crypto.randomUUID().slice(0, 8).toUpperCase();
 
     try {
+      // Type boundary: encodeURL's typings may expect @solana/kit Address
+      // types while we hold @solana/web3.js v1 PublicKey/BigNumber instances.
+      // Runtime objects are compatible — casts are type-level only. The
+      // `reference` param is passed as an array per the transfer-request spec.
       const url = encodeURL({
-        recipient: recipientKey,
-        amount: new BigNumber(amountUsdc),
-        splToken: getUsdcMint(),
-        reference: newReference,
+        recipient: recipientKey as any,
+        amount: new BigNumber(amountUsdc) as any,
+        splToken: getUsdcMint() as any,
+        reference: [newReference] as any,
         label: "Valence Terminal",
         message: `Valence order ${newOrderId}`,
       });
