@@ -12,11 +12,15 @@
 // merchant's Solana address, so purchased USDC settles directly into the
 // Circle programmable wallet — no manual address input ever exposed.
 //
-// Global SDK types live in src/types/stripe-onramp.d.ts.
+// SDK types live in src/types/stripe-onramp.d.ts (imported below).
 // =============================================================================
 
 import { useEffect, useRef, useState } from "react";
 import { getStripePublishableKey } from "@/lib/env";
+import type {
+  StripeOnrampFactory,
+  StripeOnrampSession,
+} from "@/types/stripe-onramp";
 
 const ONRAMP_SDK_URL = "https://js.stripe.com/v3/crypto-onramp.js";
 

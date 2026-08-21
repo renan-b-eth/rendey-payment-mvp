@@ -8,7 +8,13 @@ import Dashboard from "@/components/Dashboard";
 // merchant console (Circle wallet overview, Stripe Crypto Onramp top-up,
 // Solana Pay POS, settlement ledger). Auth is enforced client-side via
 // /api/auth/me with redirect to /login.
+//
+// `force-dynamic` opts the page out of static prerendering: the console is
+// authenticated (cookie session) and uses runtime-only browser APIs, so it
+// must never be evaluated during the build's static generation pass.
 // =============================================================================
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Dashboard — Valence Payment Platform",

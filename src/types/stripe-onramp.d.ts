@@ -1,20 +1,24 @@
 // =============================================================================
-// Stripe Crypto Onramp SDK — Global Type Declarations
+// Stripe Crypto Onramp SDK — Type Declarations
 //
 // The official SDK is loaded at runtime from Stripe's CDN
 // (https://js.stripe.com/v3/crypto-onramp.js) and exposes the global factory
 // `window.StripeOnramp`. There is intentionally NO npm dependency, so builds
 // never depend on registry availability for this SDK.
+//
+// This file is a MODULE (it has exports) so the TypeScript compiler always
+// picks it up regardless of tsconfig `include` patterns. The `Window`
+// augmentation is applied via `declare global`.
 // =============================================================================
 
-type StripeOnrampSessionStatus =
+export type StripeOnrampSessionStatus =
   | "initialized"
   | "rejected"
   | "requires_payment"
   | "fulfillment_processing"
   | "fulfillment_complete";
 
-interface StripeOnrampSessionUpdatedEvent {
+export interface StripeOnrampSessionUpdatedEvent {
   payload: {
     session: {
       id: string;
@@ -24,11 +28,11 @@ interface StripeOnrampSessionUpdatedEvent {
   };
 }
 
-interface StripeOnrampAppearance {
+export interface StripeOnrampAppearance {
   theme?: "dark" | "light";
 }
 
-interface StripeOnrampSession {
+export interface StripeOnrampSession {
   mount(element: HTMLElement | string): void;
   addEventListener(type: "onramp_ui_loaded", listener: () => void): void;
   addEventListener(
@@ -39,15 +43,17 @@ interface StripeOnrampSession {
   removeEventListener(type: string, listener: (event: unknown) => void): void;
 }
 
-interface StripeOnrampClient {
+export interface StripeOnrampClient {
   createSession(options: {
     clientSecret: string;
     appearance?: StripeOnrampAppearance;
   }): StripeOnrampSession;
 }
 
-type StripeOnrampFactory = (publishableKey: string) => StripeOnrampClient;
+export type StripeOnrampFactory = (publishableKey: string) => StripeOnrampClient;
 
-interface Window {
-  StripeOnramp?: StripeOnrampFactory;
+declare global {
+  interface Window {
+    StripeOnramp?: StripeOnrampFactory;
+  }
 }
