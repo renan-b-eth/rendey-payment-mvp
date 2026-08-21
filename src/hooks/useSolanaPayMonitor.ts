@@ -100,8 +100,8 @@ export function useSolanaPayMonitor({
       }
 
       try {
-        // NOTE: no options bag here — this @solana/pay version's
-        // findReference options type does not accept a `finality` property.
+        // NOTE: findReference is called with default options only — no
+        // options bag is passed, so no `finality` key exists here.
         const { signature: found } = (await findReference(
           connection as any,
           referenceKey as any
@@ -110,6 +110,9 @@ export function useSolanaPayMonitor({
         // Throws ValidateTransferError if amount/recipient/token mismatch.
         // `found` is cast because @solana/pay expects a nominal (branded)
         // Signature type from @solana/kit rather than a plain string.
+        // The options bag uses `commitment` (NOT `finality`) — that is the
+        // key declared by this @solana/pay version's validateTransfer
+        // options type.
         await validateTransfer(
           connection as any,
           found as any,
@@ -119,7 +122,7 @@ export function useSolanaPayMonitor({
             splToken: usdcMint,
             reference: referenceKey,
           } as any,
-          { finality: "confirmed" }
+          { commitment: "confirmed" }
         );
 
         if (!cancelled) {
