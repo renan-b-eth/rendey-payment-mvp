@@ -2,10 +2,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any --
    Type boundary: @solana/pay's type definitions reference @solana/kit
-   Rpc/Address types, which are structurally incompatible with
-   @solana/web3.js v1's Connection/PublicKey. The runtime objects are fully
-   compatible, so explicit `any` casts are used strictly at the call
-   boundary. */
+   Rpc/Address/Signature nominal types, which are structurally incompatible
+   with @solana/web3.js v1's Connection/PublicKey and plain strings. The
+   runtime objects are fully compatible, so explicit `any` casts are used
+   strictly at the call boundary. */
 
 // =============================================================================
 // useSolanaPayMonitor — Valence Payment Platform
@@ -100,16 +100,19 @@ export function useSolanaPayMonitor({
       }
 
       try {
+        // NOTE: no options bag here — this @solana/pay version's
+        // findReference options type does not accept a `finality` property.
         const { signature: found } = (await findReference(
           connection as any,
-          referenceKey as any,
-          { finality: "confirmed" }
+          referenceKey as any
         )) as { signature: string };
 
         // Throws ValidateTransferError if amount/recipient/token mismatch.
+        // `found` is cast because @solana/pay expects a nominal (branded)
+        // Signature type from @solana/kit rather than a plain string.
         await validateTransfer(
           connection as any,
-          found,
+          found as any,
           {
             recipient: recipientKey,
             amount: expectedAmount,
