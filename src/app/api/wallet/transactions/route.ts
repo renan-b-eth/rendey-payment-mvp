@@ -33,11 +33,15 @@ interface TransactionRow {
   direction: "in" | "out" | "unknown";
 }
 
-/** Structural subset of web3.js ParsedTokenBalance. */
+/**
+ * Structural subset of web3.js TokenBalance. `uiAmountString` is optional
+ * because web3.js types it as `string | undefined` — the parser below
+ * already falls back to "0" when it is absent.
+ */
 interface TokenBalanceLike {
   owner?: string;
   mint: string;
-  uiTokenAmount: { uiAmountString: string };
+  uiTokenAmount: { uiAmountString?: string };
 }
 
 export async function GET(request: NextRequest) {
@@ -84,9 +88,9 @@ export async function GET(request: NextRequest) {
                   0
                 );
 
-            // web3.js types pre/postTokenBalances as `ParsedTokenBalance[] |
-            // null | undefined` — normalize with `?? []` so `null` never
-            // reaches the helper's parameter type.
+            // web3.js types pre/postTokenBalances as `TokenBalance[] | null |
+            // undefined` — normalize with `?? []` so `null` never reaches the
+            // helper's parameter type.
             const delta =
               sumUsdc(tx.meta.postTokenBalances ?? []) -
               sumUsdc(tx.meta.preTokenBalances ?? []);

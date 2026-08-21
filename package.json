@@ -15,6 +15,7 @@
     "@stripe/stripe-js": "^9.13.0",
     "@transak/transak-sdk": "^4.0.2",
     "@types/big.js": "^7.0.0",
+    "better-sqlite3": "^11.10.0",
     "big.js": "^7.0.1",
     "bignumber.js": "^9.1.2",
     "lucide-react": "^1.30.0",
