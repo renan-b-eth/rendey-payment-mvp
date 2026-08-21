@@ -84,9 +84,12 @@ export async function GET(request: NextRequest) {
                   0
                 );
 
+            // web3.js types pre/postTokenBalances as `ParsedTokenBalance[] |
+            // null | undefined` — normalize with `?? []` so `null` never
+            // reaches the helper's parameter type.
             const delta =
-              sumUsdc(tx.meta.postTokenBalances) -
-              sumUsdc(tx.meta.preTokenBalances);
+              sumUsdc(tx.meta.postTokenBalances ?? []) -
+              sumUsdc(tx.meta.preTokenBalances ?? []);
 
             if (Math.abs(delta) > 0) {
               amountUsdc = Math.round(Math.abs(delta) * 1e6) / 1e6;
